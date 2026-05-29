@@ -93,7 +93,7 @@ do
 		echo "PIN:"	
 		sudo wpa_cli -i$p2pinterface wps_pin any 31415926
 		echo ""
-		./d2win10debug.py
+		./d2win11debug.py
 		if [ `sudo wpa_cli interface | grep -c "p2p-wl"` == 0 ] 
 		then
 			break

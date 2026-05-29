@@ -11,7 +11,6 @@ while loop:
 
     display = False
 
-
     for line in lines:
         if 'DIRECT' in line:
             display = True
@@ -19,8 +18,4 @@ while loop:
         elif 'Cell' in line:
             display = False
         if display:
-            print line,
-
-
-
-
+            print(line, end='')

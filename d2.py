@@ -53,14 +53,19 @@ sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
 connectcounter = 0
-while True: 
+while True:
 	try:
 		sock.connect(server_address)
 	except socket.error as e:
-		#connectcounter = connectcounter + 1
-		#if connectcounter == 3:
+		connectcounter += 1
+		if connectcounter >= 10:
+			sock.close()
+			sys.exit(1)
 		sock.close()
-		sys.exit(1)
+		sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+		sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		time.sleep(1)
 	else:
 		break
 
@@ -355,6 +360,7 @@ def killall(control):
         os.system('pkill vlc')
         os.system('pkill cvlc')
         os.system('pkill gst-launch-1.0')
+        os.system('pkill mpv')
         os.system('pkill player.bin')
         os.system('pkill h264.bin')
         if display_power_management == 1:
@@ -412,8 +418,8 @@ def launchplayer(player_select):
 		# os.system('gst-launch-1.0 -v udpsrc port=1028 ! video/mpegts ! tsdemux !  h264parse ! queue ! avdec_h264 ! ximagesink sync=false &')
 		# os.system('gst-launch-1.0  -v  playbin   uri=udp://0.0.0.0:1028/wfd1.0/streamid=0  video-sink=ximagesink audio-sink=alsasink sync=false &')
 		# os.system('gst-launch-1.0  -v  playbin   uri=udp://0.0.0.0:1028/wfd1.0/streamid=0  video-sink=xvimagesink audio-sink=alsasink sync=false &')
-		if False: # Change False to True if you want to use gstreamer
-			os.system('gst-launch-1.0  -v  playbin   uri=udp://0.0.0.0:1028/wfd1.0/streamid=0  video-sink=autovideosink audio-sink=alsasink sync=false &')
+		if True: # mpv with DRM/KMS output for headless HDMI (handles DRM master, scaling, audio)
+			os.system('mpv --vo=drm --drm-connector=HDMI-A-1 --fs rtp://0.0.0.0:1028 > /tmp/mpv.log 2>&1 &')
 		else:
 			os.system('vlc --fullscreen rtp://0.0.0.0:1028/wfd1.0/streamid=0 --intf dummy --no-ts-trust-pcr --ts-seek-percent --network-caching=300 --no-mouse-events & ')
 	elif player_select == 1:
@@ -425,13 +431,13 @@ def launchplayer(player_select):
 		os.system('./h264/h264.bin '+str(idrsockport)+' '+str(sound_output_select)+' '+sinkip+' &')
 	elif player_select == 3:
 		#if 'MSMiracastSource' in m2data:
-		#	os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 10 when no sound is playing
+		#	os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 11 when no sound is playing
 		#else:
 		#	os.system('omxplayer rtp://0.0.0.0:1028 --live &')
 		#os.system('omxplayer rtp://0.0.0.0:1028 -i')
 		omxplayerinfo = subprocess.Popen('omxplayer rtp://0.0.0.0:1028 -i'.split(),stderr=subprocess.PIPE).communicate()
 		if '0 channels' in omxplayerinfo[1]:
-			os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 10 when no sound is playing
+			os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 11 when no sound is playing
 		else:
 			os.system('omxplayer rtp://0.0.0.0:1028 --live &')
 
@@ -473,9 +479,13 @@ while True:
 				if err == errno.EAGAIN or err == errno.EWOULDBLOCK:
 					processrunning = os.popen('ps au').read()
 					if player_select == 2 and 'h264.bin' not in processrunning:
-						launchplayer(player_select)						
+						launchplayer(player_select)
+						sleep(0.01)
+					elif player_select == 0 and 'mpv' not in processrunning:
+						launchplayer(player_select)
 						sleep(0.01)
 					else:
+						sleep(0.01)
 						watchdog = watchdog + 1
 						if watchdog == 70/0.01:
 							killall(True)

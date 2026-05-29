@@ -12,110 +12,136 @@
 managefrequency=0
 LD_LIBRARY_PATH=/opt/vc/lib
 export LD_LIBRARY_PATH
+
+info()  { echo "[lazycast] $*"; }
+ok()    { echo "[lazycast] OK: $*"; }
+warn()  { echo "[lazycast] WARN: $*"; }
+
 while :
 do
+	# Kill any leftover P2P monitor from a previous session
+	sudo pkill -f "python3 ./p2p_monitor.py" 2>/dev/null || true
+
 	p2pdevinterface=$(sudo wpa_cli interface | grep -E "p2p-dev" | tail -1)
 	wlaninterface=$(echo $p2pdevinterface | cut -c1-8 --complement)
-	echo $p2pdevinterface
-	echo $wlaninterface
-	ain="$(sudo wpa_cli interface)"
-	echo "${ain}"
-	if [ `echo "${ain}" | grep -c "p2p-wl"` -gt 0 ] 
-	then
-		echo "already on"
 
-	else
-		sudo wpa_cli -i$p2pdevinterface p2p_find type=progressive
-		sudo wpa_cli -i$p2pdevinterface set device_name "$(uname -n)"
-		sudo wpa_cli -i$p2pdevinterface set device_type 7-0050F204-1
-		sudo wpa_cli -i$p2pdevinterface set p2p_go_ht40 1
-		sudo wpa_cli -i$p2pdevinterface wfd_subelem_set 0 000600111c44012c
-		sudo wpa_cli -i$p2pdevinterface wfd_subelem_set 1 0006000000000000
-		sudo wpa_cli -i$p2pdevinterface wfd_subelem_set 6 000700000000000000
+	if [ -z "$p2pdevinterface" ]; then
+		warn "No P2P device interface found. Is wpa_supplicant running? (sudo systemctl start wpa_supplicant@wlan0)"
+		sleep 5
+		continue
+	fi
+
+	ain="$(sudo wpa_cli interface)"
+
+	# Remove stale P2P group if one exists from a previous run
+	if [ `echo "${ain}" | grep -c "p2p-wl"` -gt 0 ]
+	then
+		stale=$(echo "${ain}" | grep "p2p-wl" | grep -v "interface")
+		info "Removing stale P2P group: $stale"
+		sudo wpa_cli -i"$stale" p2p_group_remove "$stale" 2>/dev/null || true
+		sleep 3
+		ain="$(sudo wpa_cli interface)"
+	fi
+
+	if [ `echo "${ain}" | grep -c "p2p-wl"` -lt 1 ]
+	then
+		info "Starting Wi-Fi Direct discovery on $p2pdevinterface ..."
+
+		sudo wpa_cli -i$p2pdevinterface p2p_find type=progressive     > /dev/null
+		sudo wpa_cli -i$p2pdevinterface set device_name "$(uname -n)" > /dev/null
+		sudo wpa_cli -i$p2pdevinterface set device_type 7-0050F204-1  > /dev/null
+		sudo wpa_cli -i$p2pdevinterface set p2p_go_ht40 1             > /dev/null
+		sudo wpa_cli -i$p2pdevinterface wfd_subelem_set 0 000600111c44012c > /dev/null
+		sudo wpa_cli -i$p2pdevinterface wfd_subelem_set 1 0006000000000000 > /dev/null
+		sudo wpa_cli -i$p2pdevinterface wfd_subelem_set 6 000700000000000000 > /dev/null
+
 		perentry="$(sudo wpa_cli -i$p2pdevinterface list_networks | grep "\[DISABLED\]\[P2P-PERSISTENT\]" | tail -1)"
-		echo "${perentry}"
-		if [ `echo "${perentry}" | grep -c "P2P-PERSISTENT"`  -gt 0 ] 
+		if [ `echo "${perentry}" | grep -c "P2P-PERSISTENT"` -gt 0 ]
 		then
 			networkid=${perentry%%D*}
 			perstr="=${networkid}"
+			info "Found persistent P2P network (id=$networkid), will reuse credentials"
 		else
 			perstr=""
 		fi
-		echo "${perstr}"
-		echo "${p2pdevinterface}"
-		wlanfreq=$(sudo wpa_cli -i$wlaninterface status | grep "freq")
-		if [ "$managefrequency" == "0" ]
+
+		if [ "$managefrequency" != "0" ]
 		then
-			wlanfreq=""
+			wlanfreq=$(sudo wpa_cli -i$wlaninterface status | grep "freq")
+			if [ "$wlanfreq" != "" ]
+			then
+				info "Matching P2P frequency to $wlaninterface: $wlanfreq"
+			fi
 		fi
-		if [ "$wlanfreq" != "" ]
-		then	
-			echo $wlaninterface": "$wlanfreq
-			echo "Setting up wifi p2p with "$wlanfreq
-		fi
-		while [ `echo "${ain}" | grep -c "p2p-wl"`  -lt 1 ] 
+
+		echo "$(date) starting p2p_monitor on $p2pdevinterface" >> /tmp/lazycast_action.log
+		sudo python3 ./p2p_monitor.py $p2pdevinterface &
+		WPA_ACTION_PID=$!
+
+		info "Waiting for source device to initiate connection..."
+		info "(On the source: open cast/display settings and select '$(uname -n)')"
+
+		while [ `echo "${ain}" | grep -c "p2p-wl"` -lt 1 ]
 		do
-			while [ `echo "${ain}" | grep -c "p2p-wl"`  -lt 1 ]
+			while [ `echo "${ain}" | grep -c "p2p-wl"` -lt 1 ]
 			do
-				#sudo wpa_cli p2p_group_add -i$p2pdevinterface persistent$perstr freq=2
-				result=$(sudo wpa_cli p2p_group_add -i$p2pdevinterface persistent$perstr)
-				if [ "$result" == "FAIL" ]					
-				then
-					wlanfreq=""
-					managefrequency=0
-				fi
 				sleep 2
 				ain="$(sudo wpa_cli interface)"
-				echo "$ain"
 			done
 			sleep 5
 			ain="$(sudo wpa_cli interface)"
-		    echo "$ain"
 		done
 
+		sudo kill $WPA_ACTION_PID 2>/dev/null || true
+		ok "P2P group formed"
 	fi
 
+	ain="$(sudo wpa_cli interface)"
 	p2pinterface=$(echo "${ain}" | grep "p2p-wl" | grep -v "interface")
-	echo $p2pinterface
 
+	info "P2P interface: $p2pinterface — configuring network ..."
+
+	sudo wpa_cli -i$p2pdevinterface p2p_find type=progressive > /dev/null
+	sudo pkill -f "busybox udhcpd" 2>/dev/null || true
 	sudo ifconfig $p2pinterface 192.168.173.1
-	printf "start	192.168.173.80\n">udhcpd.conf
-	printf "end	192.168.173.80\n">>udhcpd.conf
-	printf "interface	$p2pinterface\n">>udhcpd.conf
-	printf "option subnet 255.255.255.0\n">>udhcpd.conf
-	printf "option lease 10000">>udhcpd.conf
+
+	printf "start\t192.168.173.80\n"  > udhcpd.conf
+	printf "end\t192.168.173.80\n"   >> udhcpd.conf
+	printf "interface\t$p2pinterface\n" >> udhcpd.conf
+	printf "option subnet 255.255.255.0\n" >> udhcpd.conf
+	printf "option lease 10000\n"    >> udhcpd.conf
+
 	sleep 3
-	sudo busybox udhcpd ./udhcpd.conf 
-	echo "The display is ready"
-	echo "Your device is called: "$(uname -n)""
+	sudo busybox udhcpd ./udhcpd.conf
+
+	ok "Display ready — device name: $(uname -n)"
+	info "Logs: /tmp/lazycast.log  /tmp/lazycast_action.log  /tmp/mpv.log"
+
 	while :
-	do	
-		echo "PIN:"	
-		sudo wpa_cli -i$p2pinterface wps_pin any 31415926
-		echo ""
-		./d2.py
-		if [ `sudo wpa_cli interface | grep -c "p2p-wl"` == 0 ] 
+	do
+		sudo wpa_cli -i$p2pinterface wps_pbc > /dev/null
+		info "Waiting for WPS/PBC handshake from source ..."
+		./d2.py 2>&1 | tee -a /tmp/lazycast.log
+
+		if [ `sudo wpa_cli interface | grep -c "p2p-wl"` == 0 ]
 		then
+			info "P2P group removed — restarting discovery"
 			break
 		fi
-		
-		wlanfreq=$(sudo wpa_cli -i$wlaninterface status | grep "freq")
-		p2pfreq=$(sudo wpa_cli -i$p2pinterface status | grep "freq")
-		if [ "$managefrequency" == "0" ]
+
+		if [ "$managefrequency" != "0" ]
 		then
-			wlanfreq=""
-		fi
-		if [ "$wlanfreq" != "" ]
-		then		
-			if [ "$wlanfreq" != "$p2pfreq" ] 
+			wlanfreq=$(sudo wpa_cli -i$wlaninterface status | grep "freq")
+			p2pfreq=$(sudo wpa_cli -i$p2pinterface status | grep "freq")
+			if [ "$wlanfreq" != "" ] && [ "$wlanfreq" != "$p2pfreq" ]
 			then
-				echo "The display is disconnected since "$wlaninterface" changes from "$p2pfreq" to "$wlanfreq
-				echo "To disable WLAN roaming, run: sudo killall -STOP NetworkManager"
-				echo "You can re-enable roaming afterwards by running: sudo killall -CONT NetworkManager"
+				warn "Display disconnected: $wlaninterface moved from $p2pfreq to $wlanfreq"
+				warn "To stop WLAN roaming: sudo killall -STOP NetworkManager"
+				warn "Re-enable roaming:    sudo killall -CONT NetworkManager"
 				sudo wpa_cli -i$p2pinterface p2p_group_remove $p2pinterface
 				while :
 				do
-					if [ `sudo wpa_cli interface | grep -c "p2p-wl"` == 0 ] 
+					if [ `sudo wpa_cli interface | grep -c "p2p-wl"` == 0 ]
 					then
 						break
 					fi

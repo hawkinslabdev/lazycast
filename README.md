@@ -1,51 +1,142 @@
-lazycast: A Simple Wireless Display Receiver
+# Lazycast (for Debian)
 
-# Description
-lazycast is a simple wifi display receiver. It was originally targeted Raspberry Pi (as display) and Windows 8.1/10 (as source), but it **might** also work on other Linux platforms and Miracast sources. (For other Linux systems, skip the preparation section. For video playback from Android sources, modify the ``player_select`` option in ``d2.py``.) For Windows 10 systems, the Miracast over Infrastructure (**MICE**) feature is also supported, which may provide better user experiences. In general, lazycast does not require re-compilation of wpa_supplicant to support various p2p functionalities, and should work on an "out of the box" Raspberry Pi.
+Lazycast is a simple wifi display receiver for Linux. It supports Windows 11 sources and Miracast sources. For Windows 11, the Miracast over Infrastructure (**MICE**) feature is also supported, which may provide better user experiences. For video playback from Android sources, modify the ``player_select`` option in ``d2.py``.
 
-# OS
-Select "**Raspberry Pi OS (Legacy, 32-bit)** A port of Debian Bullseye with security updates and desktop environment" when flashing the SD card. Debian Bookworm seems to cause some issues.
+# DietPi / Debian
 
-On a fresh OS, install ``cmake``:
-```
-sudo apt install cmake
-```
-Clone the Raspberry Pi userland repo and run ``buildme``:
-```
-git clone https://github.com/raspberrypi/userland
-cd userland
-./buildme
-```
-Replace ``vc4-kms-v3d`` with ``vc4-fkms-v3d`` in ``/boot/config.txt``:
-```
-sudo sed -i 's/vc4-kms-v3d/vc4-fkms-v3d/g' /boot/config.txt
-```
-Then reboot:
-```
-sudo reboot
-```
-(You can see [this post](https://github.com/homeworkc/lazycast/issues/100#issuecomment-1003732280) for more details.)
-## Build Binaries
-Install packages (for compiling the players):
-```
-sudo apt install libx11-dev libasound2-dev libavformat-dev libavcodec-dev python3-evdev
-```
-Compile libraries on Pi:
-```
-cd /opt/vc/src/hello_pi/libs/ilclient/
-sudo make
-cd /opt/vc/src/hello_pi/hello_video
-sudo make
-```
-Clone this repo (to a desired directory):
-```
-cd ~/
-git clone https://github.com/homeworkc/lazycast
-```
-Go to the ``lazycast`` directory and then ``make``:
-```
+This section covers installation on **DietPi** or **Debian Trixie** on standard x86/ARM hardware.
+
+The in-house players (`player.bin`, `h264.bin`) require GPU libraries specific to the Broadcom VideoCore chip and cannot be compiled on standard hardware. VLC or GStreamer is used instead. `player_select` is automatically set to `0` (VLC) at runtime — no code change needed.
+
+Do **not** run `make`.
+
+## Installation
+
+Clone the repository:
+```bash
+git clone https://github.com/hawkinslabdev/lazycast
 cd lazycast
-make
+```
+
+Install required packages:
+```bash
+sudo apt install python3 python3-evdev wpasupplicant busybox-static net-tools mpv
+```
+
+- `busybox-static` — the plain `busybox` package omits the `udhcpd` applet that `all.sh` uses as a DHCP server
+- `net-tools` — provides `ifconfig`, called by `all.sh` to assign an IP to the P2P interface; not installed by default on Trixie
+- `mpv` — video player with `--vo=drm` support for headless HDMI output
+- `python3` — required for `p2p_monitor.py`, which `all.sh` uses to handle Wi-Fi Direct negotiation
+
+## Wi-Fi adapter requirement
+
+The wireless adapter must support **Wi-Fi Direct (P2P)**. Most Intel Wi-Fi adapters (AX200, AX210, Wi-Fi 6/6E) support P2P. Many budget USB adapters do not. Verify support with:
+```bash
+iw list | grep -A10 "Supported interface modes" | grep P2P
+```
+If `P2P-GO` and `P2P-client` appear, the adapter is compatible.
+
+## wpa_supplicant
+
+lazycast drives Wi-Fi P2P entirely through `wpa_cli`. A standalone `wpa_supplicant` instance must be running and managing the wireless interface.
+
+**DietPi:** `wpa_supplicant` is installed but not running by default. Set it up once:
+
+1. Ensure `/etc/wpa_supplicant/wpa_supplicant.conf` contains these lines. If `update_config=` is missing the value, fix it:
+```
+ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
+update_config=1
+```
+```
+sudo sed -i 's/^update_config=$/update_config=1/' /etc/wpa_supplicant/wpa_supplicant.conf
+```
+
+2. The `wpa_supplicant@wlan0` service expects a file named `wpa_supplicant-wlan0.conf`. Create a symlink:
+```
+sudo ln -s /etc/wpa_supplicant/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+```
+
+3. Enable and start:
+```
+sudo systemctl enable wpa_supplicant@wlan0
+sudo systemctl start wpa_supplicant@wlan0
+```
+
+4. Verify — output should list `p2p-dev-wlan0` and `wlan0`:
+```
+sudo wpa_cli interface
+```
+
+<details>
+<summary><strong>Debian Trixie desktop only — expand if <code>systemctl is-active NetworkManager</code> returns <code>active</code></strong></summary>
+
+NetworkManager keeps its own private wpa_supplicant instance that `wpa_cli` cannot reach. Unmanage the Wi-Fi adapter:
+```
+sudo mkdir -p /etc/NetworkManager/conf.d
+sudo tee /etc/NetworkManager/conf.d/unmanaged.conf <<EOF
+[keyfile]
+unmanaged-devices=interface-name:wlan0
+EOF
+```
+Restart NetworkManager, then start a standalone wpa_supplicant:
+```
+sudo systemctl restart NetworkManager
+sudo wpa_supplicant -Dnl80211 -iwlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf -u &
+```
+Ensure `/etc/wpa_supplicant/wpa_supplicant.conf` contains:
+```
+ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
+update_config=1
+```
+</details>
+
+## Video output
+
+`d2.py` defaults to `mpv` with DRM/KMS output — no desktop environment required:
+```python
+os.system('mpv --no-terminal --vo=drm --drm-connector=HDMI-A-1 --fs rtp://0.0.0.0:1028 > /tmp/mpv.log 2>&1 &')
+```
+
+**Headless with HDMI output (no desktop environment):** Uses `mpv --vo=drm` which properly acquires DRM master, hides the framebuffer console, scales to display resolution, and handles audio. Install with `sudo apt install mpv`. If the connector name differs from `HDMI-A-1`, find it with `ls /sys/class/drm/ | grep connected` and update the `--drm-connector` value in `d2.py`.
+
+**Desktop (X11):** In `d2.py` inside `launchplayer`, change `if True:` to `if False:`. This switches to VLC. Install VLC (`sudo apt install vlc`) and ensure the `DISPLAY` environment variable is set when `all.sh` runs. If starting via systemd, add `Environment=DISPLAY=:0` to the service file.
+
+**Desktop (Wayland):** Same as X11 but add `--vout=wayland` to the VLC command.
+
+For audio on headless systems, extend the GStreamer pipeline or use the VLC fallback with `--aout=alsa`.
+
+## Start on boot (systemd)
+
+A `lazycast.service` file is included in the repository. Edit the paths and add ordering dependencies before installing:
+```ini
+[Unit]
+Description=lazycast server
+After=network-online.target wpa_supplicant.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/home/<user>/lazycast/all.sh
+WorkingDirectory=/home/<user>/lazycast
+# If running under a desktop session, uncomment and set:
+# Environment=DISPLAY=:0
+
+[Install]
+WantedBy=multi-user.target
+```
+Install and enable:
+```bash
+sudo cp lazycast.service /etc/systemd/system/lazycast.service
+sudo systemctl daemon-reload
+sudo systemctl enable lazycast
+```
+
+## MICE on Debian Trixie
+
+`mice.sh` auto-detects whether to stop `dhcpcd` or use a standalone `wpa_supplicant` restart, depending on what is active. For Debian Trixie, ensure `wlan0` is unmanaged by NetworkManager before running MICE (see wpa_supplicant section above).
+
+MICE also requires additional Python packages:
+```bash
+sudo apt install python3-dbus python3-gi
 ```
 
 # Usage
@@ -54,74 +145,66 @@ Run `./all.sh` to start lazycast receiver. Wait until the "The display is ready"
 It is recommended to stop casting by the controls on the source (e.g., the PC) side.
 
 # Tips
-Set the resolution on the source side. lazycast advertises all possible resolutions regardless of the current rendering resolution. Therefore, you may want to change the resolution (on the source) to match the actual resolution of the display connecting to Pi.  
+Set the resolution on the source side. lazycast advertises all possible resolutions regardless of the current rendering resolution. Change the resolution on the source to match the actual display resolution.
 
-Modify parameters in the "settings" section in ``d2.py`` to change the sound output port (hdmi/3.5mm) and preferred player.  
+Modify parameters in the "settings" section in ``d2.py`` to change the sound output port and preferred player.
 
-The maximum resolutions supported are 1920x1080p60 and 1920x1200p30. The GPU on Pi may struggle to handle 1920x1080p60, which results in high latency. In this case, reduce the FPS to 1920x1080p50.  
+The maximum resolutions supported are 1920x1080p60 and 1920x1200p30. If latency is high at 1920x1080p60, reduce to 1920x1080p50.
 
-To change the default PIN number, replace the string ``31415926`` in ``all.sh`` to another 8-digit number.  
+To change the default PIN number, replace the string ``31415926`` in ``all.sh`` with another 8-digit number.
 
-You can hide Pi's cursor by using ``unclutter -idle 3``. See [this post](https://forums.raspberrypi.com/viewtopic.php?t=234879#p1437648).
+You can hide the cursor by using ``unclutter -idle 3``.
 
-After Pi connects to the source, it has an IP address of ``192.168.173.1`` and this connection can be reused for other purposes like SSH. On the other hand, since they are under the same subnet, precautions should be taken to prevent unauthorized access to Pi by anyone who knows the PIN number.    
+After the receiver connects to the source, it has an IP address of ``192.168.173.1`` and this connection can be reused for other purposes like SSH. Since both devices are under the same subnet, take precautions to prevent unauthorized access by anyone who knows the PIN number.
 
-Two in-house players are written for Raspberry Pi 3. VLC, omxplayer or gstreamer can be used instead on other platforms. (See [here](https://gstreamer.freedesktop.org/documentation/installing/on-linux.html) for details of installing gstreamer.) 
+**It is very important that no background WiFi scanning occurs during casting.** Disable any network manager plugins or tray applets that trigger periodic scans on the wireless interface used for casting. Verify no scanning is occurring by running ``iw event`` in a second terminal — no events should appear during casting. If the wireless interface is not connected to any network, the OS may trigger periodic scanning automatically; stop this with ``sudo ifconfig wlan0 down`` if the interface is not needed for regular internet access.
 
-**It is very important that no background WiFi scanning occurs during casting. On Raspberry Pi, lazycast will automatically disable ``lxpanel`` during casting (in order to stop the ``lxplug-network`` plugin from scanning the network), and re-enable ``lxpanel`` after the casting is terminated. You may want to disable ``wlan0`` completely (``sudo ifconfig wlan0 down``) especially if ``wlan0`` is not currently connected to any network (and periodic scanning will be triggered in such a case). You can double-check that no background WiFi scanning happens by running ``iw event`` in a second terminal (and no event should be shown). [This post](https://forums.raspberrypi.com/viewtopic.php?t=250729#p1772473) has more information.**
-
-
-To redirect mouse and keyboard inputs on Pi, first install evdev (``pip install evdev``) and then set ``enable_mouse_keyboard`` to ``1`` in ``d2.py``. You also need to allow mouse and keyboard inputs on the PC.
+To redirect mouse and keyboard inputs, first install evdev (``sudo apt install python3-evdev``) and then set ``enable_mouse_keyboard`` to ``1`` in ``d2.py``. You also need to allow mouse and keyboard inputs on the source device.
 
 # Known issues
-lazycast tries to remember the pairing credentials so that entering the PIN is only needed once for each device. However, this feature does not seem to work properly all the time with recent Raspbian images. Therefore, re-pairing may be needed after every Raspberry Pi reboot. Try clearing the 'lazycast' information on the source device before re-pairing if you run into pairing problems.  
+lazycast tries to remember the pairing credentials so that entering the PIN is only needed once for each device. However, this feature may not work reliably and re-pairing may be needed after every reboot. Try clearing the 'lazycast' information on the source device before re-pairing if you run into pairing problems.
 
-Player2 seems to have a double-free bug which causes it to crash when playing some videos. Currently a workaround (that constantly monitors the liveliness of player2) is implemented.
+Latency: Limited by the RTP player implementation. In VLC, latency can be reduced from 1200 to 300ms by lowering the network cache value (``--network-caching=300``).
 
-Latency: Limited by the implementation of the rtp player used. (In VLC, latency can be reduced from 1200 to 300ms by lowering the network cache value.)  
+Due to the overcrowded nature of the wifi spectrum and the use of unreliable RTP transmission, you may experience video glitching or audio stuttering. Interference from other devices may cause disconnections.
 
-Due to the overcrowded nature of the wifi spectrum and the use of unreliable rtp transmission, you may experience some video glitching/audio stuttering. The in-house players employ several mechanisms to conceal transmission error, but it may still be noticeable in challenging wireless environments. Interference from other devices may cause disconnections.  
+Devices may not fully support backchannel control and some keystrokes/clicks will behave differently.
 
-Devices may not fully support backchannel control and some keystrokes/clicks will behave differently. 
+HDCP (content protection) is not supported.
 
-HDCP(content protection): Neither the key nor the hardware is available on Pi and therefore is not supported.  
-
-<!-- Some Windows 10 devices seem to disconnect shortly after a connection is established. You can try using ``win10debug.sh`` instead of ``all.sh`` and see if it helps. -->
+<!-- Some Windows 11 devices seem to disconnect shortly after a connection is established. You can try using ``win11debug.sh`` instead of ``all.sh`` and see if it helps. -->
 
 # Start on boot
 
-Append this line to ``/etc/xdg/lxsession/LXDE-pi/autostart``:
-```
-@lxterminal -l --working-directory=<absolute path of lazycast> -e ./all.sh
-```
-For example, if lazycast is placed under ``~/`` (which is ``/home/pi/``, if your username is ``pi``), append the following line to the file:
-```
-@lxterminal -l --working-directory=/home/pi/lazycast -e ./all.sh
-```
+See the **Start on boot (systemd)** section under [DietPi / Debian](#dietpi--debian) above.
 
 # Miracast over Infrastructure
 
-For Windows 10 sources, Miracast over Infrastructure (MICE) is a feature that allows transmission of screen data over Ethernet or secure wifi networks. The spec of Miracast over Infrastructure (MICE) is available [here](https://winprotocoldoc.blob.core.windows.net/productionwindowsarchives/MS-MICE/%5bMS-MICE%5d.pdf). Compared to wifi p2p, it allows stabler connection and lower latency. Although MICE relies on Ethernet or secure wifi network almost entirely, in the device discovery phase, it still requires a wifi p2p device to broadcast beacon and probe response frames to the source. (However, it might be possible to use two Pis so that one of the two does not need to have wifi hardware or be physically close to the source. One Pi would be used to trasmit the beacon while the other (that runs ``./project.py``) is used to project. For such setting to work, the variable ``hostname`` in ``mice.py`` must be set to the hostname of the machine running ``project.py``. In the future, it might be possible to emulate a wifi card by HW/SW on the source so that wifi p2p will not be necessary.)  
+For Windows 11 sources, Miracast over Infrastructure (MICE) is a feature that allows transmission of screen data over Ethernet or secure wifi networks. The spec is available [here](https://winprotocoldoc.blob.core.windows.net/productionwindowsarchives/MS-MICE/%5bMS-MICE%5d.pdf). Compared to wifi p2p, it allows stabler connection and lower latency. MICE relies on Ethernet or secure wifi for data, but still requires a wifi p2p device to broadcast beacon and probe response frames during device discovery. It is possible to run the beacon and the receiver on two separate machines — set the ``hostname`` variable in ``mice.py`` to the hostname of the machine running ``project.py``.
 
-Currently, this feature is tested to be working with a Windows 10 PC and a Pi (with manually assigned IPs) connected via Ethernet. More tests might be needed, especially for different DHCP, DNS and firewall configurations. Ports used include but are not limited to UDP 53 (DNS), UDP 5353 (mDNS), TCP 7236 and TCP 7250. Also, the encryption feature is not implemented yet so it should only be used over trusted networks and it should not be used for sensitive data. MICE works in ipv6 networks but currently only ipv4 is implemented.  
+Currently tested with a Windows 11 PC and a receiver (with manually assigned IPs) connected via Ethernet. Ports used include but are not limited to UDP 53 (DNS), UDP 5353 (mDNS), TCP 7236 and TCP 7250. Encryption is not implemented — use only over trusted networks. IPv6 networks are supported but only IPv4 is implemented.
 
 ## Preparation
 Install avahi-utils:
-```
+```bash
 sudo apt install avahi-utils
 ```
-Make sure the Windows 10 PC is on the same network as the Pi. You can try pinging the Pi from the PC.  
-NetworkManager is **not** required for this version of MICE. However, using MICE will disable the built-in WiFi UI. (To restore the built-in WiFi UI after MICE, either run ``resetwpa.sh`` or simply reboot.)   
+Make sure the Windows 11 PC is on the same network as the receiver. Verify by pinging the receiver from the PC.
+
+For Debian/DietPi: see the **MICE on Debian Trixie** section above for wpa_supplicant setup and additional packages. Run ``resetwpa.sh`` or reboot to restore normal WiFi operation after MICE.
+
 ## Usage
-Make sure there is no p2p interface that has already been created and ``all.sh`` is not running. (Make sure ``all.sh`` does not start on boot and then simply reboot.)  
+Make sure no p2p interface has already been created and ``all.sh`` is not running. Then run:
+```bash
+./mice.sh
+```
 
-Run ``./mice.sh``.  
+Use the "Connect" tab in Windows 11 and connect to the hostname of the receiver. Windows may try the traditional method first and ask for a PIN — cancel and try again. With MICE, no PIN prompt should appear.
 
-Use the "Connect" tab in Windows 10 and try to connect to the hostname of Pi (e.g., raspberrypi). Windows may try to connect using the traditional method first and therefore may ask for PIN. In that case, simply cancel the connecting process and try again. Since no encryption is implemented at the moment, the prompt for PIN should not appear using MICE.  
+Windows 11 assigns the display name based on the connected monitor. If the monitor is detected, the display name changes to the monitor name; otherwise it shows "Device". After disconnection it reverts to the receiver's hostname.
 
-Windows 10 assigns the name of the display differently when using MICE. If the monitor connected to the Pi is successfully detected by the PC, the name of the display (e.g., raspberrypi) will be changed to the name of the monitor. If the detection fails, the name of the display will be changed to "Device". After disconnection, the name of the display will be changed back to the hostname of Pi (e.g., raspberrypi).  
+To run MICE and wifi p2p simultaneously, set ``concurrent`` to ``1`` in ``newmice.py`` and use only ``mice.sh``. If mDNS is not working with multiple IPs, manually set the ``ipstr`` variable in ``newmice.py`` to the target IP.  
 
-If you wish to run MICE and wifi p2p simultaneously, set the parameter ``concurrent`` to ``1`` in ``newmice.py`` and only uses ``mice.sh``. When there are multiple IPs assigned to the Pi and mDNS does not seem to be working, manually set the ``ipstr`` variable in ``newmice.py`` to the target IP of Pi and a PC will try to connect to this IP directly.  
-# Others
-Some parts of the video player1 are modified from the codes on https://github.com/Apress/raspberry-pi-gpu-audio-video-prog. Many thanks to the author of "Raspberry Pi GPU Audio Video Programming" and, by extension, authors of omxplayer.  
-Using any part of the codes in this project in commercial products is prohibited.
+# License
+
+This project is licensed under the **GPL 3.0** license. See [LICENSE](https://github.com/homeworkc/lazycast/LICENSE) for details.

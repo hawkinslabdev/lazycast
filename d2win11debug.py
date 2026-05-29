@@ -192,13 +192,13 @@ def launchplayer(player_select):
 		os.system('./h264/h264.bin '+str(idrsockport)+' '+str(sound_output_select)+' '+sinkip+' &')
 	elif player_select == 3:
 		#if 'MSMiracastSource' in m2data:
-		#	os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 10 when no sound is playing
+		#	os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 11 when no sound is playing
 		#else:
 		#	os.system('omxplayer rtp://0.0.0.0:1028 --live &')
 		#os.system('omxplayer rtp://0.0.0.0:1028 -i')
 		omxplayerinfo = subprocess.Popen('omxplayer rtp://0.0.0.0:1028 -i'.split(),stderr=subprocess.PIPE).communicate()
 		if '0 channels' in omxplayerinfo[1]:
-			os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 10 when no sound is playing
+			os.system('omxplayer rtp://0.0.0.0:1028 -n -1 --live &') # For Windows 11 when no sound is playing
 		else:
 			os.system('omxplayer rtp://0.0.0.0:1028 --live &')
 
