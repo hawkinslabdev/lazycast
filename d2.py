@@ -42,6 +42,44 @@ display_power_management = 0
 
 ####################################################
 
+def _load_env(path='.env'):
+	env = {}
+	try:
+		with open(path) as f:
+			for line in f:
+				line = line.strip()
+				if line and not line.startswith('#') and '=' in line:
+					k, v = line.split('=', 1)
+					env[k.strip()] = v.strip().strip('"').strip("'")
+	except FileNotFoundError:
+		pass
+	return env
+
+_env = _load_env()
+device_name = _env.get('DEVICE_NAME', 'lazycast')
+
+def _get_native_cea_index():
+	try:
+		out = subprocess.check_output(['xrandr'], stderr=subprocess.DEVNULL).decode()
+		for line in out.splitlines():
+			if '*' in line:
+				w, h = map(int, line.strip().split()[0].split('x'))
+				if w == 1920 and h == 1080:
+					return 7 if disable_1920_1080_60fps else 8
+				elif w == 1280 and h == 720:
+					return 6
+				elif w == 720 and h == 576:
+					return 3
+				elif w == 720 and h == 480:
+					return 1
+				return 0
+	except Exception:
+		pass
+	return 0
+
+_cea_native = _get_native_cea_index()
+print(f'[config] device_name={device_name!r}, native_cea_index={_cea_native}')
+
 parser = argparse.ArgumentParser()
 parser.add_argument('arg1', nargs='?', default='192.168.173.80')
 args = parser.parse_args()
@@ -232,10 +270,11 @@ if player_select == 2:
 else:
 	msg = msg + 'wfd_audio_codecs: AAC 00000001 00\r\n'
 
+_native_hex = '{:02X}'.format(_cea_native)
 if disable_1920_1080_60fps == 1:
-	msg = msg + 'wfd_video_formats: 00 00 02 10 0001FEFF 3FFFFFFF 00000FFF 00 0000 0000 00 none none\r\n'
+	msg = msg + f'wfd_video_formats: {_native_hex} 00 02 10 0001FEFF 3FFFFFFF 00000FFF 00 0000 0000 00 none none\r\n'
 else:
-	msg = msg + 'wfd_video_formats: 00 00 02 10 0001FFFF 3FFFFFFF 00000FFF 00 0000 0000 00 none none\r\n'
+	msg = msg + f'wfd_video_formats: {_native_hex} 00 02 10 0001FFFF 3FFFFFFF 00000FFF 00 0000 0000 00 none none\r\n'
 
 msg = msg +'wfd_3d_video_formats: none\r\n'\
 	+'wfd_coupled_sink: none\r\n'\
@@ -258,7 +297,7 @@ if 'wfd_display_edid' in data and edidlen != 0:
 # 	msg = msg + 'microsoft_format_change_capability: supported\r\n'
 
 if 'intel_friendly_name' in data:
-	msg = msg + 'intel_friendly_name: raspberrypi\r\n'
+	msg = msg + f'intel_friendly_name: {device_name}\r\n'
 if 'intel_sink_manufacturer_name' in data:
 	msg = msg + 'intel_sink_manufacturer_name: lazycast\r\n'
 if 'intel_sink_model_name' in data:

@@ -17,6 +17,9 @@ info()  { echo "[lazycast] $*"; }
 ok()    { echo "[lazycast] OK: $*"; }
 warn()  { echo "[lazycast] WARN: $*"; }
 
+[ -f .env ] && export $(grep -v '^#' .env | xargs)
+DEVICE_NAME="${DEVICE_NAME:-$(uname -n)}"
+
 while :
 do
 	# Kill any leftover P2P monitor from a previous session
@@ -48,7 +51,7 @@ do
 		info "Starting Wi-Fi Direct discovery on $p2pdevinterface ..."
 
 		sudo wpa_cli -i$p2pdevinterface p2p_find type=progressive     > /dev/null
-		sudo wpa_cli -i$p2pdevinterface set device_name "$(uname -n)" > /dev/null
+		sudo wpa_cli -i$p2pdevinterface set device_name "$DEVICE_NAME" > /dev/null
 		sudo wpa_cli -i$p2pdevinterface set device_type 7-0050F204-1  > /dev/null
 		sudo wpa_cli -i$p2pdevinterface set p2p_go_ht40 1             > /dev/null
 		sudo wpa_cli -i$p2pdevinterface wfd_subelem_set 0 000600111c44012c > /dev/null
@@ -79,7 +82,7 @@ do
 		WPA_ACTION_PID=$!
 
 		info "Waiting for source device to initiate connection..."
-		info "(On the source: open cast/display settings and select '$(uname -n)')"
+		info "(On the source: open cast/display settings and select '$DEVICE_NAME')"
 
 		while [ `echo "${ain}" | grep -c "p2p-wl"` -lt 1 ]
 		do
@@ -114,7 +117,7 @@ do
 	sleep 3
 	sudo busybox udhcpd ./udhcpd.conf
 
-	ok "Display ready — device name: $(uname -n)"
+	ok "Display ready — device name: $DEVICE_NAME"
 	info "Logs: /tmp/lazycast.log  /tmp/lazycast_action.log  /tmp/mpv.log"
 
 	while :
